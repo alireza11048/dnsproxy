@@ -10,6 +10,9 @@
 
 #include "dnsproxy.h"
 #include "asciilogo.h"
+#include <curl/curl.h>
+#include "doh_lib.h"
+#include <stdbool.h>
 
 #ifndef VERSION
 #define VERSION "development"
@@ -23,7 +26,7 @@
 #pragma comment(lib,"mswsock")
 #endif
 
-
+const char default_url[] = "https://free.shecan.ir/dns-query";
 
 typedef struct {
 	SOCKET sock;
@@ -43,6 +46,7 @@ typedef struct {
 typedef struct {
 	LOCAL_DNS local;
 	REMOTE_DNS remote;
+	CURLM *curl_multi;
 } PROXY_ENGINE;
 
 static const int enable = 1;
@@ -208,6 +212,189 @@ static void process_query(PROXY_ENGINE *engine)
 	}
 	if(rhdr->rcode != 0)
 		sendto(ldns->sock, rbuffer, sizeof(DNS_HDR), 0, (struct sockaddr*)&source, sizeof(struct sockaddr_in));
+}
+
+static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers)
+{
+	LOCAL_DNS *ldns;
+	CURLM *curl_multi;
+	DNS_HDR *hdr, *rhdr;
+	DNS_QDS *qds;
+	DNS_RRS *rrs;
+	DOMAIN_CACHE *dcache;
+	TRANSPORT_CACHE *tcache;
+	socklen_t addrlen;
+	struct sockaddr_in source;
+	char *pos, *head, *rear;
+	char *buffer, domain[PACKAGE_SIZE], rbuffer[PACKAGE_SIZE];
+	int size, dlen;
+	time_t current;
+	unsigned char qlen;
+	unsigned int ttl, ttl_tmp;
+	unsigned short index, q_len;
+
+	ldns = &engine->local;
+	curl_multi = &engine->remote;
+	buffer = ldns->buffer + sizeof(unsigned short);
+
+	addrlen = sizeof(struct sockaddr_in);
+	size = recvfrom(ldns->sock, buffer, PACKAGE_SIZE, 0, (struct sockaddr*)&source, &addrlen);
+	if(size <= (int)sizeof(DNS_HDR))
+		return;
+
+	hdr = (DNS_HDR*)buffer;
+	rhdr = (DNS_HDR*)rbuffer;
+	memset(rbuffer, 0, sizeof(DNS_HDR));
+
+	
+	q_len = 0;
+	qds = NULL;
+	head = buffer + sizeof(DNS_HDR);
+	rear = buffer + size;
+	if(hdr->qr != 0 || hdr->tc != 0 || ntohs(hdr->qd_count) != 1)
+		rhdr->rcode = 1;
+	else {
+		dlen = 0;
+		pos = head;
+		while(pos < rear) {
+			qlen = (unsigned char)*pos++;
+			if(qlen > 63 || (pos + qlen) > (rear - sizeof(DNS_QDS))) {
+				rhdr->rcode = 1;
+				break;
+			}
+			if(qlen > 0) {
+				if(dlen > 0)
+					domain[dlen++] = '.';
+				while(qlen-- > 0)
+					domain[dlen++] = (char)tolower(*pos++);
+			}
+			else {
+				qds = (DNS_QDS*) pos;
+				if(ntohs(qds->classes) != 0x01)
+					rhdr->rcode = 4;
+				else {
+					pos += sizeof(DNS_QDS);
+					q_len = pos - head;
+				}
+				break;
+			}
+		}
+		domain[dlen] = '\0';
+	}
+
+	if(rhdr->rcode == 0) {
+		int still_running = 0;
+		int queued;
+		CURLMsg *msg;
+		int exit_status = 0;
+		int rc;
+		struct dnsentry d;
+		int successful = 0;
+		int repeats = 0;
+
+		initprobe(DNS_TYPE_A, domain, default_url, curl_multi,
+                     0, headers, 0, v46, NULL);
+
+
+		curl_multi_perform(curl_multi, &still_running);
+		
+		do 
+		{
+			CURLMcode mc; /* curl_multi_wait() return code */
+			int numfds;
+
+			/* wait for activity, timeout or "nothing" */
+			mc = curl_multi_wait(curl_multi, NULL, 0, 1000, &numfds);
+
+			if(mc != CURLM_OK) 
+			{
+				fprintf(stderr, "curl_multi_wait() failed, code %d.\n", mc);
+				break;
+			}
+
+			/* 'numfds' being zero means either a timeout or no file descriptors to
+			wait for. Try timeout on first occurrence, then assume no file
+			descriptors and no file descriptors to wait for means wait for 100
+			milliseconds. */
+
+			if(!numfds) 
+			{
+				repeats++; /* count number of repeated zero numfds */
+				if(repeats > 1) 
+				{
+					WAITMS(10); /* sleep 10 milliseconds */
+				}
+			}
+			else
+				repeats = 0;
+
+			curl_multi_perform(curl_multi, &still_running);
+			while((msg = curl_multi_info_read(curl_multi, &queued))) 
+			{
+				if(msg->msg == CURLMSG_DONE) 
+				{
+					struct dnsprobe *probe;
+					CURL *e = msg->easy_handle;
+					curl_easy_getinfo(msg->easy_handle, CURLINFO_PRIVATE, &probe);
+
+					/* Check for errors */
+					if(msg->data.result != CURLE_OK) 
+					{
+						fprintf(stderr, "probe for %s failed: %s\n",
+						type2name(probe->dnstype),
+						curl_easy_strerror(msg->data.result));
+						exit_status = 1;
+					}
+					else
+					{
+						long response_code;
+						curl_easy_getinfo(e, CURLINFO_RESPONSE_CODE, &response_code);
+						if((response_code / 100 ) == 2) 
+						{
+							rc = doh_decode(probe->serverdoh.memory,
+											probe->serverdoh.size,
+											probe->dnstype, &d);
+							if(rc) 
+							{
+								if(rc == DOH_DNS_BAD_RCODE) 
+								{
+									fprintf(stderr, "Bad rcode, %s (%s)\n", domain, type2name(probe->dnstype));
+								}
+								else if(rc != DOH_NO_CONTENT) 
+								{
+									fprintf(stderr, "problem %d decoding %" FMT_SIZE_T
+									" bytes response to probe for %s\n",
+									rc, probe->serverdoh.size, type2name(probe->dnstype));
+									exit_status = 1;
+								}
+							}
+							else
+								successful++;
+						}
+						else 
+						{
+							fprintf(stderr, "Probe for %s got response: %03ld\n", type2name(probe->dnstype), response_code);
+						}
+						free(probe->serverdoh.memory);
+					}
+					curl_multi_remove_handle(curl_multi, e);
+					curl_easy_cleanup(e);
+					free(probe);
+				}
+			}
+		} while(still_running);
+
+		printf("[%s]\n", domain);
+		printf("TTL: %u secnds\n", d.ttl);
+		for(int i=0; i < d.numv4; i++) 
+		{
+        	printf("A: %d.%d.%d.%d\n",
+				d.v4addr[i]>>24,
+				(d.v4addr[i]>>16) & 0xff,
+				(d.v4addr[i]>>8) & 0xff,
+				d.v4addr[i] & 0xff);
+      	}
+	}
 }
 
 static void process_response(char* buffer, int size)
@@ -377,6 +564,8 @@ static int dnsproxy(unsigned short local_port, const char* remote_addr, unsigned
 	struct timeval timeout;
 	struct sockaddr_in addr;
 	time_t current, last_clean;
+	struct curl_slist *headers = NULL;
+
 #ifdef _WIN32
 	BOOL bNewBehavior = FALSE;
 	DWORD dwBytesReturned = 0;
@@ -403,7 +592,16 @@ static int dnsproxy(unsigned short local_port, const char* remote_addr, unsigned
 		return -1;
 	}
 
-	rdns->tcp = remote_tcp;
+	// initilizing the curl
+	curl_global_init(CURL_GLOBAL_ALL);
+	/* use the older content-type */
+	headers = curl_slist_append(headers,
+								"Content-Type: application/dns-message");
+	headers = curl_slist_append(headers,
+								"Accept: application/dns-message");
+
+	engine->curl_multi = curl_multi_init();
+	/*rdns->tcp = remote_tcp;
 	rdns->sock = INVALID_SOCKET;
 	rdns->addr.sin_family = AF_INET;
 	rdns->addr.sin_addr.s_addr = inet_addr(remote_addr);
@@ -420,32 +618,34 @@ static int dnsproxy(unsigned short local_port, const char* remote_addr, unsigned
 #ifdef _WIN32
 		WSAIoctl(rdns->sock, SIO_UDP_CONNRESET, &bNewBehavior, sizeof(bNewBehavior), NULL, 0, &dwBytesReturned, NULL, NULL);
 #endif
-	}
+	}*/
 
 	last_clean = time(&current);
 	while(1) {
 		FD_ZERO(&readfds);
 		FD_SET(ldns->sock, &readfds);
 		maxfd = (int)ldns->sock;
-		if(rdns->sock != INVALID_SOCKET) {
-			FD_SET(rdns->sock, &readfds);
-			if(maxfd < (int)rdns->sock)
-				maxfd = (int)rdns->sock;
+
+		/* if active probes are empty, waiting for a dns request */
+		if(get_active_probe_count() == 0)
+		{
+			timeout.tv_sec = CACHE_CLEAN_TIME;
+			timeout.tv_usec = 0;
+			fds = select(maxfd + 1, &readfds, NULL, NULL, &timeout);
+			if(fds > 0) {
+				/*if(rdns->sock != INVALID_SOCKET
+					&& FD_ISSET(rdns->sock, &readfds)) {
+					if(rdns->tcp)
+						process_response_tcp(rdns);
+					else
+						process_response_udp(rdns);
+				}*/
+				if(FD_ISSET(ldns->sock, &readfds))
+					process_doh_query(engine, headers);
+			}	
 		}
-		timeout.tv_sec = CACHE_CLEAN_TIME;
-		timeout.tv_usec = 0;
-		fds = select(maxfd + 1, &readfds, NULL, NULL, &timeout);
-		if(fds > 0) {
-			if(rdns->sock != INVALID_SOCKET
-				&& FD_ISSET(rdns->sock, &readfds)) {
-				if(rdns->tcp)
-					process_response_tcp(rdns);
-				else
-					process_response_udp(rdns);
-			}
-			if(FD_ISSET(ldns->sock, &readfds))
-				process_query(engine);
-		}
+
+		
 		if(time(&current) - last_clean > CACHE_CLEAN_TIME || fds == 0) {
 			last_clean = current;
 			domain_cache_clean(current);

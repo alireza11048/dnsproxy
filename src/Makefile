@@ -8,7 +8,7 @@ RM = rm -f
 CP = cp -f
 
 LDLIBS = `curl-config --libs`
-CFLAGS = -g -Wall -DVERSION=\"${version}\" -DNDEBUG `curl-config --cflags`
+CFLAGS = -g -W -Wall `curl-config --cflags`
 PREFIX = /usr
 TARGET = dnsproxy
 INCLUDES = $(wildcard *.h embed/*.h)

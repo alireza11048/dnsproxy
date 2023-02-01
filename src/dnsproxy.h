@@ -38,6 +38,12 @@
 #define closesocket close
 #endif
 
+#ifdef _WIN32
+#define FMT_SIZE_T "Iu"
+#else
+#define FMT_SIZE_T "lu" /* actually a size_t */
+#endif
+
 #include <time.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -123,6 +129,15 @@ typedef struct {
 	unsigned short old_id;
 	struct sockaddr_in source;
 } TRANSPORT_CACHE;
+
+#ifdef _WIN32
+#define WAITMS(x) Sleep(x)
+#else
+/* Portable sleep for platforms other than Windows. */
+#define WAITMS(x)                               \
+  struct timeval wait = { 0, (x) * 1000 };      \
+  (void)select(0, NULL, NULL, NULL, &wait);
+#endif
 
 void transport_cache_init(unsigned short timeout);
 TRANSPORT_CACHE* transport_cache_search(unsigned short new_id);

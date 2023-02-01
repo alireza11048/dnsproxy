@@ -12,6 +12,8 @@
 
 #define DNS_CLASS_IN 0x01
 
+#include <stdbool.h>
+
 typedef enum {
   DOH_OK,
   DOH_DNS_BAD_LABEL,    /* 1 */
@@ -31,7 +33,7 @@ struct data {
   char trace_ascii; /* 1 or 0 */
 };
 
-const char default_url[] = "https://free.shecan.ir/dns-query";
+
 
 struct response {
   unsigned char *memory;
@@ -78,5 +80,28 @@ static const char *type2name(int dnstype)
 }
 
 enum iptrans { v4, v6, v46 };
+
+typedef struct doh_status_t
+{
+  /* data */
+  int probe_count;
+}doh_status;
+
+/* one of these for each http request */
+struct dnsprobe {
+  CURL *curl;
+  int dnstype;
+  unsigned char dohbuffer[512];
+  size_t dohlen;
+  struct response serverdoh;
+  struct data config;
+};
+
+int get_active_probe_count(void);
+int init_doh_lib(void);
+int initprobe(int dnstype, char *host, const char *url, CURLM *multi,
+                     int trace_enabled, struct curl_slist *headers,
+                     bool insecure_mode, enum iptrans transport,
+                     struct curl_slist *resolve);
 
 #endif

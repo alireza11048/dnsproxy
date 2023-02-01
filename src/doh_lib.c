@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include "doh_lib.h"
 
+doh_status doh_module_status;
+
 void dump(const char *text,
           FILE *stream, unsigned char *ptr, size_t size,
           char nohex)
@@ -378,7 +380,7 @@ static DOHcode rdata(unsigned char *doh,
   return DOH_OK;
 }
 
-static DOHcode doh_decode(unsigned char *doh,
+DOHcode doh_decode(unsigned char *doh,
                           size_t dohlen,
                           int dnstype,
                           struct dnsentry *d)
@@ -529,17 +531,9 @@ static void doh_cleanup(struct dnsentry *d)
   }
 }
 
-/* one of these for each http request */
-struct dnsprobe {
-  CURL *curl;
-  int dnstype;
-  unsigned char dohbuffer[512];
-  size_t dohlen;
-  struct response serverdoh;
-  struct data config;
-};
 
-static int initprobe(int dnstype, char *host, const char *url, CURLM *multi,
+
+int initprobe(int dnstype, char *host, const char *url, CURLM *multi,
                      int trace_enabled, struct curl_slist *headers,
                      bool insecure_mode, enum iptrans transport,
                      struct curl_slist *resolve)
@@ -613,4 +607,14 @@ static int initprobe(int dnstype, char *host, const char *url, CURLM *multi,
   }
 
   return 0;
+}
+
+int init_doh_lib(void)
+{
+  doh_module_status.probe_count = 0;
+}
+
+int get_active_probe_count(void)
+{
+  return doh_module_status.probe_count;
 }
