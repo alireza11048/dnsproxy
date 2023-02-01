@@ -234,7 +234,7 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers)
 	unsigned short index, q_len;
 
 	ldns = &engine->local;
-	curl_multi = &engine->remote;
+	curl_multi = engine->curl_multi;
 	buffer = ldns->buffer + sizeof(unsigned short);
 
 	addrlen = sizeof(struct sockaddr_in);
