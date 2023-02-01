@@ -23,6 +23,8 @@
 #pragma comment(lib,"mswsock")
 #endif
 
+
+
 typedef struct {
 	SOCKET sock;
 	char buffer[PACKAGE_SIZE + sizeof(unsigned short)];
