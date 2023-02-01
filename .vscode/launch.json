@@ -1,0 +1,22 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "C/C++: gcc-9 build active file",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/dnsproxy",
+            "args": ["-p 53", "-R 192.168.18.4"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/src",
+            "environment": [],
+            "externalConsole": false,
+            "preLaunchTask": "gcc build active file",
+            "options": {
+                "cwd": "${workspaceRoot}/src"
+            },
+            "miDebuggerPath": "/home/s2/dns-proxy/dnsproxy/exec_debugger",
+            "sudo": true
+        }
+    ]
+}

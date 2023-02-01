@@ -7,8 +7,7 @@ CC = gcc
 RM = rm -f
 CP = cp -f
 
-CFLAGS = -O2 -Wall -DVERSION=\"${version}\" -DNDEBUG
-LDFLAGS = -s
+CFLAGS = -g -Wall -DVERSION=\"${version}\" -DNDEBUG
 PREFIX = /usr
 
 TARGET = dnsproxy
