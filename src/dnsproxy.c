@@ -409,8 +409,8 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers)
 			}
 			size_of_valid_request_packet = index + 5 /* 2byte query class + 2byte query type + 1byte current byte*/;
 
-			char *response_buffer = malloc(size_of_valid_request_packet /* size of the */ + 2 /* response name */ + sizeof(DNS_RRS) + 4 /*size of the result ip*/);
-			memset(response_buffer, 0, size_of_valid_request_packet + 2 /* response name */ + sizeof(DNS_RRS) + 4);
+			char *response_buffer = malloc(size_of_valid_request_packet /* size of the */ + (2 /* response name */ + sizeof(DNS_RRS) + 4 /*size of the result ip*/) * d.numv4);
+			memset(response_buffer, 0, size_of_valid_request_packet + (2 /* response name */ + sizeof(DNS_RRS) + 4) * d.numv4); 
 			memcpy(response_buffer, buffer, size_of_valid_request_packet);
 			
 			// adjusting the response header
@@ -421,30 +421,38 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers)
 			response_hdr->ra = 1;
 			response_hdr->ad = 0;
 			response_hdr->rcode = 0;
-			response_hdr->an_count = ntohs(1);
+			response_hdr->an_count = ntohs(d.numv4);
 			response_hdr->ns_count = ntohs(0);
 			response_hdr->nr_count = ntohs(0);
 			
+			// poitner to the query entry
+			DNS_QDS *querey_entry = response_buffer + size_of_valid_request_packet - 4;
+
+			int answer_entry_size = (2 /* response name */ + sizeof(DNS_RRS) + 4);
+			int offset = 0;
 			// adjusting the answer section
 			// pointing to the query section
-			response_buffer[size_of_valid_request_packet] = 0xc0;
-			response_buffer[size_of_valid_request_packet + 1] = 0x0c;
-			DNS_RRS *answer_entry = response_buffer + size_of_valid_request_packet + 2;
-			DNS_QDS *querey_entry = response_buffer + size_of_valid_request_packet - 4;
-			answer_entry->type = querey_entry->type;
-			answer_entry->classes = querey_entry->classes;
-			answer_entry->ttl = htonl(d.ttl);
-			answer_entry->rd_length = htons(4);
-			answer_entry->rd_data[0] = (d.v4addr[0]>>24) & 0xff;
-			answer_entry->rd_data[1] = (d.v4addr[0]>>16) & 0xff;
-			answer_entry->rd_data[2] = (d.v4addr[0]>>8) & 0xff;
-			answer_entry->rd_data[3] = (d.v4addr[0]) & 0xff;
-
+			for(int i = 0; i < d.numv4; i++)
+			{
+				response_buffer[size_of_valid_request_packet + offset] = 0xc0;
+				response_buffer[size_of_valid_request_packet + offset + 1] = 0x0c;
+				DNS_RRS *answer_entry = response_buffer + size_of_valid_request_packet + offset + 2;
+				answer_entry->type = querey_entry->type;
+				answer_entry->classes = querey_entry->classes;
+				answer_entry->ttl = htonl(d.ttl);
+				answer_entry->rd_length = htons(4);
+				answer_entry->rd_data[0] = (d.v4addr[0]>>24) & 0xff;
+				answer_entry->rd_data[1] = (d.v4addr[0]>>16) & 0xff;
+				answer_entry->rd_data[2] = (d.v4addr[0]>>8) & 0xff;
+				answer_entry->rd_data[3] = (d.v4addr[0]) & 0xff;
+				offset += answer_entry_size;
+			}
 			sendto(ldns->sock, response_buffer, size_of_valid_request_packet + 2 /* response name */ + sizeof(DNS_RRS) + 4, 0, &source, sizeof(struct sockaddr_in));
 			free(response_buffer);
 		}
 	}
-	else
+	
+	if(result_code != 0)
 	{
 		char rbuffer[PACKAGE_SIZE];
 		DNS_HDR *rhdr;
