@@ -384,6 +384,7 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers)
 			}
 		} while(still_running);
 
+		
 		printf("[%s]\n", domain);
 		printf("TTL: %u secnds\n", d.ttl);
 		for(int i=0; i < d.numv4; i++) 
@@ -394,6 +395,50 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers)
 				(d.v4addr[i]>>8) & 0xff,
 				d.v4addr[i] & 0xff);
       	}
+
+		/* creating the approprate response */
+
+		//finding the query section size
+		int index = sizeof(DNS_HDR);
+		while(buffer[index] != 0)
+		{
+			index += buffer[index] + 1;
+		}
+		size = index + 5;
+
+		char *response_buffer = malloc(size + 2 /* response name */ + sizeof(DNS_RRS) + 4);
+		response_buffer[0] = 0;
+		memset(response_buffer, 0, size + 2 /* response name */ + sizeof(DNS_RRS) + 4);
+		memcpy(response_buffer, buffer, size);
+		
+		// adjusting the response header
+		DNS_HDR *response_hdr = response_buffer;
+		response_hdr->qr = 1;
+		response_hdr->aa = 0;
+		response_hdr->tc = 0;
+		response_hdr->ra = 1;
+		response_hdr->ad = 0;
+		response_hdr->rcode = 0;
+		response_hdr->an_count = ntohs(1);
+		response_hdr->ns_count = ntohs(0);
+		response_hdr->nr_count = ntohs(0);
+		
+		// adjusting the answer section
+		response_buffer[size] = 0xc0;
+		response_buffer[size + 1] = 0x0c;
+		DNS_RRS *answer_entry = response_buffer + size + 2;
+		DNS_QDS *querey_entry = response_buffer + size - 4;
+		answer_entry->type = querey_entry->type;
+		answer_entry->classes = querey_entry->classes;
+		answer_entry->ttl = htonl(d.ttl);
+		answer_entry->rd_length = htons(4);
+		answer_entry->rd_data[0] = (d.v4addr[0]>>24) & 0xff;
+		answer_entry->rd_data[1] = (d.v4addr[0]>>16) & 0xff;
+		answer_entry->rd_data[2] = (d.v4addr[0]>>8) & 0xff;
+		answer_entry->rd_data[3] = (d.v4addr[0]) & 0xff;
+
+		sendto(ldns->sock, response_buffer, size + 2 /* response name */ + sizeof(DNS_RRS) + 4, 0, &source, sizeof(struct sockaddr_in));
+		free(response_buffer);
 	}
 }
 

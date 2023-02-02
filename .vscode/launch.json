@@ -15,7 +15,7 @@
             "options": {
                 "cwd": "${workspaceRoot}/src"
             },
-            "miDebuggerPath": "/home/s2/dns-proxy/dnsproxy/exec_debugger",
+            "miDebuggerPath": "${workspaceRoot}/exec_debugger",
             "sudo": true
         }
     ]
