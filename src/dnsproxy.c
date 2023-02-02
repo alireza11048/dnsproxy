@@ -218,20 +218,16 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers)
 {
 	LOCAL_DNS *ldns;
 	CURLM *curl_multi;
-	DNS_HDR *hdr, *rhdr;
+	DNS_HDR *hdr;
 	DNS_QDS *qds;
-	DNS_RRS *rrs;
-	DOMAIN_CACHE *dcache;
-	TRANSPORT_CACHE *tcache;
 	socklen_t addrlen;
 	struct sockaddr_in source;
 	char *pos, *head, *rear;
-	char *buffer, domain[PACKAGE_SIZE], rbuffer[PACKAGE_SIZE];
+	char *buffer, domain[PACKAGE_SIZE];
 	int size, dlen;
-	time_t current;
 	unsigned char qlen;
 	unsigned int ttl, ttl_tmp;
-	unsigned short index, q_len;
+	unsigned short index, q_len, result_code = 0;
 
 	ldns = &engine->local;
 	curl_multi = engine->curl_multi;
@@ -243,36 +239,42 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers)
 		return;
 
 	hdr = (DNS_HDR*)buffer;
-	rhdr = (DNS_HDR*)rbuffer;
-	memset(rbuffer, 0, sizeof(DNS_HDR));
-
-	
 	q_len = 0;
 	qds = NULL;
 	head = buffer + sizeof(DNS_HDR);
 	rear = buffer + size;
 	if(hdr->qr != 0 || hdr->tc != 0 || ntohs(hdr->qd_count) != 1)
-		rhdr->rcode = 1;
-	else {
+	{
+		result_code = 1;
+	}
+	else 
+	{
 		dlen = 0;
 		pos = head;
-		while(pos < rear) {
+		while(pos < rear) 
+		{
 			qlen = (unsigned char)*pos++;
-			if(qlen > 63 || (pos + qlen) > (rear - sizeof(DNS_QDS))) {
-				rhdr->rcode = 1;
+			if(qlen > 63 || (pos + qlen) > (rear - sizeof(DNS_QDS))) 
+			{
+				result_code = 1;
 				break;
 			}
-			if(qlen > 0) {
+			if(qlen > 0) 
+			{
 				if(dlen > 0)
 					domain[dlen++] = '.';
 				while(qlen-- > 0)
 					domain[dlen++] = (char)tolower(*pos++);
 			}
-			else {
+			else 
+			{
 				qds = (DNS_QDS*) pos;
 				if(ntohs(qds->classes) != 0x01)
-					rhdr->rcode = 4;
-				else {
+				{
+					result_code = 4;
+				}
+				else 
+				{
 					pos += sizeof(DNS_QDS);
 					q_len = pos - head;
 				}
@@ -282,30 +284,32 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers)
 		domain[dlen] = '\0';
 	}
 
-	if(rhdr->rcode == 0) {
+	// checking that the query type is supported
+	if(ntohs(qds->type) != DNS_TYPE_A && ntohs(qds->type) != DNS_TYPE_AAAA &&
+	ntohs(qds->type) != DNS_TYPE_CNAME && ntohs(qds->type) != DNS_TYPE_NS && ntohs(qds->type) != DNS_TYPE_TXT)
+	{
+		result_code = 1;
+	}
+
+	if(result_code == 0) 
+	{
 		int still_running = 0;
 		int queued;
 		CURLMsg *msg;
-		int exit_status = 0;
 		int rc;
 		struct dnsentry d;
 		int successful = 0;
-		int repeats = 0;
+		int repeats = 0;		
 
-		initprobe(DNS_TYPE_A, domain, default_url, curl_multi,
-                     0, headers, 0, v46, NULL);
-
-
-		curl_multi_perform(curl_multi, &still_running);
-		
+		initprobe(ntohs(qds->type), domain, default_url, curl_multi, 0, headers, 0, v46, NULL);
+		curl_multi_perform(curl_multi, &still_running);		
 		do 
 		{
-			CURLMcode mc; /* curl_multi_wait() return code */
+			CURLMcode mc; 
 			int numfds;
 
-			/* wait for activity, timeout or "nothing" */
+			// wait for activity, timeout or "nothing"
 			mc = curl_multi_wait(curl_multi, NULL, 0, 1000, &numfds);
-
 			if(mc != CURLM_OK) 
 			{
 				fprintf(stderr, "curl_multi_wait() failed, code %d.\n", mc);
@@ -316,7 +320,6 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers)
 			wait for. Try timeout on first occurrence, then assume no file
 			descriptors and no file descriptors to wait for means wait for 100
 			milliseconds. */
-
 			if(!numfds) 
 			{
 				repeats++; /* count number of repeated zero numfds */
@@ -343,7 +346,7 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers)
 						fprintf(stderr, "probe for %s failed: %s\n",
 						type2name(probe->dnstype),
 						curl_easy_strerror(msg->data.result));
-						exit_status = 1;
+						result_code = 1;
 					}
 					else
 					{
@@ -365,7 +368,7 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers)
 									fprintf(stderr, "problem %d decoding %" FMT_SIZE_T
 									" bytes response to probe for %s\n",
 									rc, probe->serverdoh.size, type2name(probe->dnstype));
-									exit_status = 1;
+									result_code = 1;
 								}
 							}
 							else
@@ -384,61 +387,72 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers)
 			}
 		} while(still_running);
 
-		
-		printf("[%s]\n", domain);
-		printf("TTL: %u secnds\n", d.ttl);
-		for(int i=0; i < d.numv4; i++) 
+		if(result_code == 0)
 		{
-        	printf("A: %d.%d.%d.%d\n",
-				d.v4addr[i]>>24,
-				(d.v4addr[i]>>16) & 0xff,
-				(d.v4addr[i]>>8) & 0xff,
-				d.v4addr[i] & 0xff);
-      	}
+			int size_of_valid_request_packet;
+			printf("[%s]\n", domain);
+			printf("TTL: %u secnds\n", d.ttl);
+			for(int i=0; i < d.numv4; i++) 
+			{
+				printf("A: %d.%d.%d.%d\n",
+					d.v4addr[i]>>24,
+					(d.v4addr[i]>>16) & 0xff,
+					(d.v4addr[i]>>8) & 0xff,
+					d.v4addr[i] & 0xff);
+			}
 
-		/* creating the approprate response */
+			//finding the query section size
+			int index = sizeof(DNS_HDR);
+			while(buffer[index] != 0)
+			{
+				index += buffer[index] + 1;
+			}
+			size_of_valid_request_packet = index + 5 /* 2byte query class + 2byte query type + 1byte current byte*/;
 
-		//finding the query section size
-		int index = sizeof(DNS_HDR);
-		while(buffer[index] != 0)
-		{
-			index += buffer[index] + 1;
+			char *response_buffer = malloc(size_of_valid_request_packet /* size of the */ + 2 /* response name */ + sizeof(DNS_RRS) + 4 /*size of the result ip*/);
+			memset(response_buffer, 0, size_of_valid_request_packet + 2 /* response name */ + sizeof(DNS_RRS) + 4);
+			memcpy(response_buffer, buffer, size_of_valid_request_packet);
+			
+			// adjusting the response header
+			DNS_HDR *response_hdr = response_buffer;
+			response_hdr->qr = 1;
+			response_hdr->aa = 0;
+			response_hdr->tc = 0;
+			response_hdr->ra = 1;
+			response_hdr->ad = 0;
+			response_hdr->rcode = 0;
+			response_hdr->an_count = ntohs(1);
+			response_hdr->ns_count = ntohs(0);
+			response_hdr->nr_count = ntohs(0);
+			
+			// adjusting the answer section
+			// pointing to the query section
+			response_buffer[size_of_valid_request_packet] = 0xc0;
+			response_buffer[size_of_valid_request_packet + 1] = 0x0c;
+			DNS_RRS *answer_entry = response_buffer + size_of_valid_request_packet + 2;
+			DNS_QDS *querey_entry = response_buffer + size_of_valid_request_packet - 4;
+			answer_entry->type = querey_entry->type;
+			answer_entry->classes = querey_entry->classes;
+			answer_entry->ttl = htonl(d.ttl);
+			answer_entry->rd_length = htons(4);
+			answer_entry->rd_data[0] = (d.v4addr[0]>>24) & 0xff;
+			answer_entry->rd_data[1] = (d.v4addr[0]>>16) & 0xff;
+			answer_entry->rd_data[2] = (d.v4addr[0]>>8) & 0xff;
+			answer_entry->rd_data[3] = (d.v4addr[0]) & 0xff;
+
+			sendto(ldns->sock, response_buffer, size_of_valid_request_packet + 2 /* response name */ + sizeof(DNS_RRS) + 4, 0, &source, sizeof(struct sockaddr_in));
+			free(response_buffer);
 		}
-		size = index + 5;
-
-		char *response_buffer = malloc(size + 2 /* response name */ + sizeof(DNS_RRS) + 4);
-		response_buffer[0] = 0;
-		memset(response_buffer, 0, size + 2 /* response name */ + sizeof(DNS_RRS) + 4);
-		memcpy(response_buffer, buffer, size);
-		
-		// adjusting the response header
-		DNS_HDR *response_hdr = response_buffer;
-		response_hdr->qr = 1;
-		response_hdr->aa = 0;
-		response_hdr->tc = 0;
-		response_hdr->ra = 1;
-		response_hdr->ad = 0;
-		response_hdr->rcode = 0;
-		response_hdr->an_count = ntohs(1);
-		response_hdr->ns_count = ntohs(0);
-		response_hdr->nr_count = ntohs(0);
-		
-		// adjusting the answer section
-		response_buffer[size] = 0xc0;
-		response_buffer[size + 1] = 0x0c;
-		DNS_RRS *answer_entry = response_buffer + size + 2;
-		DNS_QDS *querey_entry = response_buffer + size - 4;
-		answer_entry->type = querey_entry->type;
-		answer_entry->classes = querey_entry->classes;
-		answer_entry->ttl = htonl(d.ttl);
-		answer_entry->rd_length = htons(4);
-		answer_entry->rd_data[0] = (d.v4addr[0]>>24) & 0xff;
-		answer_entry->rd_data[1] = (d.v4addr[0]>>16) & 0xff;
-		answer_entry->rd_data[2] = (d.v4addr[0]>>8) & 0xff;
-		answer_entry->rd_data[3] = (d.v4addr[0]) & 0xff;
-
-		sendto(ldns->sock, response_buffer, size + 2 /* response name */ + sizeof(DNS_RRS) + 4, 0, &source, sizeof(struct sockaddr_in));
-		free(response_buffer);
+	}
+	else
+	{
+		char rbuffer[PACKAGE_SIZE];
+		DNS_HDR *rhdr;
+		rhdr = (DNS_HDR*)rbuffer;
+		rhdr->id = hdr->id;
+		rhdr->qr = 1;
+		rhdr->rcode = result_code;
+		sendto(ldns->sock, rbuffer, sizeof(DNS_HDR), 0, (struct sockaddr*)&source, sizeof(struct sockaddr_in));
 	}
 }
 
@@ -646,24 +660,7 @@ static int dnsproxy(unsigned short local_port, const char* remote_addr, unsigned
 								"Accept: application/dns-message");
 
 	engine->curl_multi = curl_multi_init();
-	/*rdns->tcp = remote_tcp;
-	rdns->sock = INVALID_SOCKET;
-	rdns->addr.sin_family = AF_INET;
-	rdns->addr.sin_addr.s_addr = inet_addr(remote_addr);
-	rdns->addr.sin_port = htons(remote_port);
-	rdns->head = 0;
-	rdns->rear = 0;
-	rdns->capacity = sizeof(rdns->buffer);
-	if(!rdns->tcp) {
-		rdns->sock = socket(AF_INET, SOCK_DGRAM, 0);
-		if(rdns->sock == INVALID_SOCKET) {
-			perror("create socket");
-			return -1;
-		}
-#ifdef _WIN32
-		WSAIoctl(rdns->sock, SIO_UDP_CONNRESET, &bNewBehavior, sizeof(bNewBehavior), NULL, 0, &dwBytesReturned, NULL, NULL);
-#endif
-	}*/
+	
 
 	last_clean = time(&current);
 	while(1) {
@@ -678,13 +675,6 @@ static int dnsproxy(unsigned short local_port, const char* remote_addr, unsigned
 			timeout.tv_usec = 0;
 			fds = select(maxfd + 1, &readfds, NULL, NULL, &timeout);
 			if(fds > 0) {
-				/*if(rdns->sock != INVALID_SOCKET
-					&& FD_ISSET(rdns->sock, &readfds)) {
-					if(rdns->tcp)
-						process_response_tcp(rdns);
-					else
-						process_response_udp(rdns);
-				}*/
 				if(FD_ISSET(ldns->sock, &readfds))
 					process_doh_query(engine, headers);
 			}	
