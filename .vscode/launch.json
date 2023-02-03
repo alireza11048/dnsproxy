@@ -6,7 +6,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/src/dnsproxy",
-            "args": ["-p 53", "-R 192.168.18.4"],
+            "args": ["-p 53"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/src",
             "environment": [],

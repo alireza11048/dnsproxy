@@ -129,6 +129,7 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, 
 		int successful = 0;
 		int repeats = 0;		
 
+		memset(&d, 0, sizeof(struct dnsentry));
 		initprobe(ntohs(qds->type), domain, DoH_url, curl_multi, 0, headers, 0, v46, NULL);
 		curl_multi_perform(curl_multi, &still_running);		
 		do 
