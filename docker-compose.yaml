@@ -1,0 +1,7 @@
+services:
+  dohproxy:
+    image: dnsproxy:latest
+    ports:
+      - "53:53/udp"
+    container_name: DoHProxy
+    entrypoint: ["/app/scripts/run.sh"]

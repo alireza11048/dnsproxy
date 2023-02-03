@@ -371,7 +371,7 @@ struct xoption options[] = {
 	{'h', "help", xargument_no, NULL, -1},
 	{'d', "daemon", xargument_no, NULL, -1},
 	{'p', "port", xargument_required, NULL, -1},
-	{'U', "DoH-server-url", xargument_no, NULL, -1},
+	{'U', "DoH-server-url", xargument_required, NULL, -1},
 	{'f', "hosts-file", xargument_required, NULL, -1},
 	{0, "disable-cache", xargument_no, &disable_cache, 1},
 	{0, NULL, xargument_no, NULL, 0},
