@@ -13,6 +13,7 @@
 #include <curl/curl.h>
 #include "doh_lib.h"
 #include <stdbool.h>
+#include "pthread.h"
 
 #ifndef VERSION
 #define VERSION "development"
@@ -366,6 +367,38 @@ static int dnsproxy(unsigned short local_port, const char* DoH_url)
 	return 0;
 }
 
+pthread_mutex_t curl_mutex;
+
+typedef struct listener_thread_args_t{
+	unsigned short port;
+	char* DoH_url;
+}listener_thread_args;
+
+void* listener_thread(void* arg)
+{
+	listener_thread_args* listener_config = (listener_thread_args*)arg;
+
+	printf("listener started\n");
+	printf("local port: %d\n", listener_config->port);
+	printf("DoH url: %s\n", listener_config->DoH_url);
+	pthread_mutex_lock(&curl_mutex);
+	printf("listener, mutex locked\n");
+	pthread_mutex_unlock(&curl_mutex);
+	printf("listener, mutex unlocked\n");
+	pthread_exit((void*) 0);
+}
+
+void* responder_therd(void* arg)
+{
+	printf("responder started\n");
+	pthread_mutex_lock(&curl_mutex);
+	printf("responder, mutex locked\n");
+	WAITMS(1000);
+	pthread_mutex_unlock(&curl_mutex);
+	printf("responder, mutex unlocked\n");
+	pthread_exit((void*) 0);
+}
+
 struct xoption options[] = {
 	{'v', "version", xargument_no, NULL, -1},
 	{'h', "help", xargument_no, NULL, -1},
@@ -408,6 +441,10 @@ int main(int argc, const char* argv[])
 	const char *hosts_file = NULL;
 	const char *DoH_url = default_url;
 	unsigned short local_port = 8053;
+	pthread_attr_t attr;  
+	pthread_t listenerd_thread_id;
+	pthread_t responder_thread_id;
+	void *status;
 
 	optind = 0;
 	opt = xgetopt(argc, argv, options, &optind, &optarg);
@@ -489,5 +526,17 @@ int main(int argc, const char* argv[])
 	srand((unsigned int)time(NULL));
 	domain_cache_init(hosts_file);
 	transport_cache_init(transport_timeout);
-	return dnsproxy(local_port, DoH_url);
+	//return dnsproxy(local_port, DoH_url);
+
+	pthread_mutex_init(&curl_mutex, NULL);
+	
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
+
+	listener_thread_args listner_args = {.port= local_port, .DoH_url=DoH_url};
+	pthread_create(&listenerd_thread_id, &attr, listener_thread, (void*) &listner_args);
+	pthread_create(&responder_thread_id, &attr, responder_therd, NULL);
+
+	pthread_join(listenerd_thread_id, status);
+	pthread_join(responder_thread_id, status);
 }

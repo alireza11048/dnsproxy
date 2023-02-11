@@ -7,7 +7,7 @@ CC = gcc
 RM = rm -f
 CP = cp -f
 
-LDLIBS = `curl-config --libs`
+LDLIBS = -lpthread `curl-config --libs`
 CFLAGS = -g -W -Wall `curl-config --cflags`
 PREFIX = /usr
 TARGET = dnsproxy
