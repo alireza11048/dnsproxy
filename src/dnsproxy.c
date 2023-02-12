@@ -37,13 +37,14 @@ typedef struct {
 typedef struct {
 	LOCAL_DNS local;
 	CURLM *curl_multi;
+	pthread_mutex_t curl_mutex;
 } PROXY_ENGINE;
 
 static PROXY_ENGINE g_engine;
 static const int enable = 1;
 static int disable_cache = 0;
 
-static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, const char* DoH_url)
+static void doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, const char* DoH_url)
 {
 	LOCAL_DNS *ldns;
 	CURLM *curl_multi;
@@ -353,7 +354,7 @@ static int dnsproxy(unsigned short local_port, const char* DoH_url)
 			fds = select(maxfd + 1, &readfds, NULL, NULL, &timeout);
 			if(fds > 0) {
 				if(FD_ISSET(ldns->sock, &readfds))
-					process_doh_query(engine, headers, DoH_url);
+					doh_query(engine, headers, DoH_url);
 			}	
 		}
 
@@ -367,34 +368,300 @@ static int dnsproxy(unsigned short local_port, const char* DoH_url)
 	return 0;
 }
 
-pthread_mutex_t curl_mutex;
+
 
 typedef struct listener_thread_args_t{
 	unsigned short port;
 	char* DoH_url;
 }listener_thread_args;
 
+static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, const char* DoH_url)
+{
+	LOCAL_DNS *ldns;
+	CURLM *curl_multi;
+	DNS_HDR *hdr;
+	DNS_QDS *qds;
+	socklen_t addrlen;
+	struct sockaddr_in source;
+	char *pos, *head, *rear;
+	char *buffer, domain[PACKAGE_SIZE];
+	int size, dlen;
+	unsigned char qlen;
+	unsigned int ttl, ttl_tmp;
+	unsigned short index, q_len, result_code = 0;
+
+	ldns = &engine->local;
+	curl_multi = engine->curl_multi;
+	buffer = ldns->buffer + sizeof(unsigned short);
+
+	addrlen = sizeof(struct sockaddr_in);
+	size = recvfrom(ldns->sock, buffer, PACKAGE_SIZE, 0, (struct sockaddr*)&source, &addrlen);
+	if(size <= (int)sizeof(DNS_HDR))
+		return;
+
+	hdr = (DNS_HDR*)buffer;
+	q_len = 0;
+	qds = NULL;
+	head = buffer + sizeof(DNS_HDR);
+	rear = buffer + size;
+	if(hdr->qr != 0 || hdr->tc != 0 || ntohs(hdr->qd_count) != 1)
+	{
+		result_code = 1;
+	}
+	else 
+	{
+		dlen = 0;
+		pos = head;
+		while(pos < rear) 
+		{
+			qlen = (unsigned char)*pos++;
+			if(qlen > 63 || (pos + qlen) > (rear - sizeof(DNS_QDS))) 
+			{
+				result_code = 1;
+				break;
+			}
+			if(qlen > 0) 
+			{
+				if(dlen > 0)
+					domain[dlen++] = '.';
+				while(qlen-- > 0)
+					domain[dlen++] = (char)tolower(*pos++);
+			}
+			else 
+			{
+				qds = (DNS_QDS*) pos;
+				if(ntohs(qds->classes) != 0x01)
+				{
+					result_code = 4;
+				}
+				else 
+				{
+					pos += sizeof(DNS_QDS);
+					q_len = pos - head;
+				}
+				break;
+			}
+		}
+		domain[dlen] = '\0';
+	}
+
+	// checking that the query type is supported
+	if(ntohs(qds->type) != DNS_TYPE_A && ntohs(qds->type) != DNS_TYPE_AAAA &&
+	ntohs(qds->type) != DNS_TYPE_CNAME && ntohs(qds->type) != DNS_TYPE_NS && ntohs(qds->type) != DNS_TYPE_TXT)
+	{
+		result_code = 1;
+	}
+
+	if(result_code == 0) 
+	{
+		int still_running = 0;
+		int queued;
+		CURLMsg *msg;
+		int rc;
+		struct dnsentry d;
+		int successful = 0;
+		int repeats = 0;		
+
+		memset(&d, 0, sizeof(struct dnsentry));
+		initprobe(ntohs(qds->type), domain, DoH_url, curl_multi, 0, headers, 0, v46, NULL);
+	}
+	
+	if(result_code != 0)
+	{
+		char rbuffer[PACKAGE_SIZE];
+		DNS_HDR *rhdr;
+		rhdr = (DNS_HDR*)rbuffer;
+		rhdr->id = hdr->id;
+		rhdr->qr = 1;
+		rhdr->rcode = result_code;
+		sendto(ldns->sock, rbuffer, sizeof(DNS_HDR), 0, (struct sockaddr*)&source, sizeof(struct sockaddr_in));
+	}
+}
+
 void* listener_thread(void* arg)
 {
 	listener_thread_args* listener_config = (listener_thread_args*)arg;
 
+	int maxfd, fds;
+	fd_set readfds;
+	struct timeval timeout;
+	struct sockaddr_in addr;
+	time_t current, last_clean;
+	struct curl_slist *headers = NULL;
+
+	PROXY_ENGINE *engine = &g_engine;
+	LOCAL_DNS *ldns = &engine->local;
+
+	// creating the socket
+	ldns->sock = socket(AF_INET, SOCK_DGRAM, 0);
+	if(ldns->sock == INVALID_SOCKET) {
+		perror("create socket");
+		return -1;
+	}
+	setsockopt(ldns->sock, SOL_SOCKET, SO_REUSEADDR, (char*)&enable, sizeof(enable));
+
+	// binding the socket to the dns port
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = INADDR_ANY;
+	addr.sin_port = htons(listener_config->port);
+	if(bind(ldns->sock, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+		perror("bind service port");
+		return -1;
+	}
+
+	
+	/* use the older content-type */
+	headers = curl_slist_append(headers,
+								"Content-Type: application/dns-message");
+	headers = curl_slist_append(headers,
+								"Accept: application/dns-message");
+	
+	last_clean = time(&current);
+	while(1) {
+		FD_ZERO(&readfds);
+		FD_SET(ldns->sock, &readfds);
+		maxfd = (int)ldns->sock;
+
+		timeout.tv_sec = CACHE_CLEAN_TIME;
+		timeout.tv_usec = 0;
+		// waiting for dns request
+		fds = select(maxfd + 1, &readfds, NULL, NULL, &timeout);
+		if(fds > 0) {
+			if(FD_ISSET(ldns->sock, &readfds))
+			{
+				// waking the responder thread up
+				curl_multi_wakeup(engine->curl_multi);
+
+				//aquring the mutex
+				pthread_mutex_lock(&g_engine.curl_mutex);
+
+				process_doh_query(engine, headers, listener_config->DoH_url);
+
+				//releasing the mutex
+				pthread_mutex_unlock(&g_engine.curl_mutex);
+			}
+		}
+
+		
+		if(time(&current) - last_clean > CACHE_CLEAN_TIME || fds == 0) {
+			last_clean = current;
+			domain_cache_clean(current);
+			transport_cache_clean(current);
+		}
+	}
+
+	pthread_exit((void*) 0);
+
+
 	printf("listener started\n");
 	printf("local port: %d\n", listener_config->port);
 	printf("DoH url: %s\n", listener_config->DoH_url);
-	pthread_mutex_lock(&curl_mutex);
+	pthread_mutex_lock(&g_engine.curl_mutex);
 	printf("listener, mutex locked\n");
-	pthread_mutex_unlock(&curl_mutex);
-	printf("listener, mutex unlocked\n");
-	pthread_exit((void*) 0);
+	pthread_mutex_unlock(&g_engine.curl_mutex);
+	printf("listener, mutex unlocked\n");	
 }
 
 void* responder_therd(void* arg)
 {
+	PROXY_ENGINE *engine = &g_engine;
+	int still_running = 0;
+	int queued;
+	CURLMsg *msg;
+	int result_code = 0;
+	int rc;
+	struct dnsentry d;
+
+	pthread_mutex_lock(&g_engine.curl_mutex);
+	curl_multi_perform(engine->curl_multi, &still_running);
+	do 
+	{
+		CURLMcode mc; 
+		int numfds;
+
+		// wait for activity, timeout or "nothing"
+		mc = curl_multi_poll(engine->curl_multi, NULL, 0, 1000, &numfds);
+		if(mc != CURLM_OK) 
+		{
+			fprintf(stderr, "curl_multi_wait() failed, code %d.\n", mc);
+			break;
+		}
+
+		/* 'numfds' being zero means either a timeout or no file descriptors to
+		wait for. Try timeout on first occurrence, then assume no file
+		descriptors and no file descriptors to wait for means wait for 100
+		milliseconds. */
+		if(!numfds) 
+		{
+			pthread_mutex_unlock(&g_engine.curl_mutex);
+			WAITMS(10);
+			pthread_mutex_lock(&g_engine.curl_mutex);
+		}
+
+		curl_multi_perform(engine->curl_multi, &still_running);
+		while((msg = curl_multi_info_read(engine->curl_multi, &queued))) 
+		{
+			if(msg->msg == CURLMSG_DONE) 
+			{
+				struct dnsprobe *probe;
+				CURL *e = msg->easy_handle;
+				curl_easy_getinfo(msg->easy_handle, CURLINFO_PRIVATE, &probe);
+
+				/* Check for errors */
+				if(msg->data.result != CURLE_OK) 
+				{
+					fprintf(stderr, "probe for %s failed: %s\n",
+					type2name(probe->dnstype),
+					curl_easy_strerror(msg->data.result));
+					result_code = 1;
+				}
+				else
+				{
+					long response_code;
+					curl_easy_getinfo(e, CURLINFO_RESPONSE_CODE, &response_code);
+					if((response_code / 100 ) == 2) 
+					{
+						rc = doh_decode(probe->serverdoh.memory,
+										probe->serverdoh.size,
+										probe->dnstype, &d);
+						if(rc) 
+						{
+							if(rc == DOH_DNS_BAD_RCODE) 
+							{
+								fprintf(stderr, "Bad rcode,(%s)\n", type2name(probe->dnstype));
+							}
+							else if(rc != DOH_NO_CONTENT) 
+							{
+								fprintf(stderr, "problem %d decoding %" FMT_SIZE_T
+								" bytes response to probe for %s\n",
+								rc, probe->serverdoh.size, type2name(probe->dnstype));
+								result_code = 1;
+							}
+						}
+						else
+						{
+							fprintf(stderr, "successful probe\n");
+						}
+					}
+					else 
+					{
+						fprintf(stderr, "Probe for %s got response: %03ld\n", type2name(probe->dnstype), response_code);
+					}
+					free(probe->serverdoh.memory);
+				}
+				curl_multi_remove_handle(engine->curl_multi, e);
+				curl_easy_cleanup(e);
+				free(probe);
+			}
+		}
+	} while(true);
+
 	printf("responder started\n");
-	pthread_mutex_lock(&curl_mutex);
+	pthread_mutex_lock(&g_engine.curl_mutex);
 	printf("responder, mutex locked\n");
 	WAITMS(1000);
-	pthread_mutex_unlock(&curl_mutex);
+	pthread_mutex_unlock(&g_engine.curl_mutex);
 	printf("responder, mutex unlocked\n");
 	pthread_exit((void*) 0);
 }
@@ -528,7 +795,10 @@ int main(int argc, const char* argv[])
 	transport_cache_init(transport_timeout);
 	//return dnsproxy(local_port, DoH_url);
 
-	pthread_mutex_init(&curl_mutex, NULL);
+	// initilzing the proxy engine
+	curl_global_init(CURL_GLOBAL_ALL);
+	g_engine.curl_multi = curl_multi_init();
+	pthread_mutex_init(&g_engine.curl_mutex, NULL);
 	
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
