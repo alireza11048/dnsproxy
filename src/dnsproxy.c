@@ -641,6 +641,15 @@ void* responder_therd(void* arg)
 						}
 						else
 						{
+							printf("TTL: %u secnds\n", d.ttl);
+							for(int i=0; i < d.numv4; i++) 
+							{
+								printf("A: %d.%d.%d.%d\n",
+									d.v4addr[i]>>24,
+									(d.v4addr[i]>>16) & 0xff,
+									(d.v4addr[i]>>8) & 0xff,
+									d.v4addr[i] & 0xff);
+							}
 							fprintf(stderr, "successful probe\n");
 						}
 					}
