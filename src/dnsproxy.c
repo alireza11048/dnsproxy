@@ -664,6 +664,45 @@ void* responder_thread(void* arg)
 							}
 							fprintf(stderr, "successful probe\n");
 							fprintf(stderr, "request_size: %d\n", probe->request_info->size_of_valid_request_packet);
+
+							// resizing the response buffer
+							probe->request_info->response_buffer = realloc(probe->request_info->response_buffer, probe->request_info->size_of_valid_request_packet /* size of the */ + (2 /* response name */ + sizeof(DNS_RRS) + 4 /*size of the result ip*/) * d.numv4);
+							memset(probe->request_info->response_buffer + probe->request_info->size_of_valid_request_packet, 0, (2 /* response name */ + sizeof(DNS_RRS) + 4 /*size of the result ip*/) * d.numv4);
+							
+							DNS_HDR *response_hdr = probe->request_info->response_buffer;
+							response_hdr->qr = 1;
+							response_hdr->aa = 0;
+							response_hdr->tc = 0;
+							response_hdr->ra = 1;
+							response_hdr->ad = 0;
+							response_hdr->rcode = 0;
+							response_hdr->an_count = ntohs(d.numv4);
+							response_hdr->ns_count = ntohs(0);
+							response_hdr->nr_count = ntohs(0);
+
+							// poitner to the query entry
+							DNS_QDS *querey_entry = probe->request_info->response_buffer + probe->request_info->size_of_valid_request_packet - 4;
+
+							int answer_entry_size = (2 /* response name */ + sizeof(DNS_RRS) + 4);
+							int offset = 0;
+							// adjusting the answer section
+							// pointing to the query section
+							for(int i = 0; i < d.numv4; i++)
+							{
+								probe->request_info->response_buffer[probe->request_info->size_of_valid_request_packet + offset] = 0xc0;
+								probe->request_info->response_buffer[probe->request_info->size_of_valid_request_packet + offset + 1] = 0x0c;
+								DNS_RRS *answer_entry = probe->request_info->response_buffer + probe->request_info->size_of_valid_request_packet + offset + 2;
+								answer_entry->type = querey_entry->type;
+								answer_entry->classes = querey_entry->classes;
+								answer_entry->ttl = htonl(d.ttl);
+								answer_entry->rd_length = htons(4);
+								answer_entry->rd_data[0] = (d.v4addr[0]>>24) & 0xff;
+								answer_entry->rd_data[1] = (d.v4addr[0]>>16) & 0xff;
+								answer_entry->rd_data[2] = (d.v4addr[0]>>8) & 0xff;
+								answer_entry->rd_data[3] = (d.v4addr[0]) & 0xff;
+								offset += answer_entry_size;
+							}
+							sendto(engine->local.sock, probe->request_info->response_buffer, probe->request_info->size_of_valid_request_packet + 2 /* response name */ + sizeof(DNS_RRS) + 4, 0, &probe->request_info->source, sizeof(struct sockaddr_in));
 							memset(&d, 0, sizeof(struct dnsentry));
 						}
 					}
