@@ -13,6 +13,7 @@
 #define DNS_CLASS_IN 0x01
 
 #include <stdbool.h>
+#include <netinet/in.h>
 
 typedef enum {
   DOH_OK,
@@ -87,6 +88,12 @@ typedef struct doh_status_t
   int probe_count;
 }doh_status;
 
+typedef struct dns_request_info_t{
+	int size_of_valid_request_packet;
+	char* response_buffer;
+	struct sockaddr_in source;
+}dns_request_info;
+
 /* one of these for each http request */
 struct dnsprobe {
   CURL *curl;
@@ -95,6 +102,7 @@ struct dnsprobe {
   size_t dohlen;
   struct response serverdoh;
   struct data config;
+  dns_request_info* request_info;
 };
 
 int get_active_probe_count(void);
@@ -102,6 +110,6 @@ int init_doh_lib(void);
 int initprobe(int dnstype, char *host, const char *url, CURLM *multi,
                      int trace_enabled, struct curl_slist *headers,
                      bool insecure_mode, enum iptrans transport,
-                     struct curl_slist *resolve);
+                     struct curl_slist *resolve, dns_request_info *request_info);
 
 #endif

@@ -132,7 +132,7 @@ static void doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, const ch
 		int repeats = 0;		
 
 		memset(&d, 0, sizeof(struct dnsentry));
-		initprobe(ntohs(qds->type), domain, DoH_url, curl_multi, 0, headers, 0, v46, NULL);
+		initprobe(ntohs(qds->type), domain, DoH_url, curl_multi, 0, headers, 0, v46, NULL, NULL);
 		curl_multi_perform(curl_multi, &still_running);		
 		do 
 		{
@@ -369,7 +369,6 @@ static int dnsproxy(unsigned short local_port, const char* DoH_url)
 }
 
 
-
 typedef struct listener_thread_args_t{
 	unsigned short port;
 	char* DoH_url;
@@ -462,8 +461,21 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, 
 		int successful = 0;
 		int repeats = 0;		
 
+		// collecting the request data to be used during generating the response
+		dns_request_info *probe_info = malloc(sizeof (dns_request_info));
+		memcpy(&probe_info->source, &source, sizeof(struct sockaddr_in));
+		int index = sizeof(DNS_HDR);
+		while(buffer[index] != 0)
+		{
+			index += buffer[index] + 1;
+		}
+		probe_info->size_of_valid_request_packet = index + 5 /* 2byte query class + 2byte query type + 1byte current byte*/;
+		probe_info->response_buffer = malloc(probe_info->size_of_valid_request_packet);
+		memset(probe_info->response_buffer, 0, probe_info->size_of_valid_request_packet); 
+		memcpy(probe_info->response_buffer, buffer, probe_info->size_of_valid_request_packet);
+
 		memset(&d, 0, sizeof(struct dnsentry));
-		initprobe(ntohs(qds->type), domain, DoH_url, curl_multi, 0, headers, 0, v46, NULL);
+		initprobe(ntohs(qds->type), domain, DoH_url, curl_multi, 0, headers, 0, v46, NULL, probe_info);
 	}
 	
 	if(result_code != 0)
@@ -563,7 +575,7 @@ void* listener_thread(void* arg)
 	printf("listener, mutex unlocked\n");	
 }
 
-void* responder_therd(void* arg)
+void* responder_thread(void* arg)
 {
 	PROXY_ENGINE *engine = &g_engine;
 	int still_running = 0;
@@ -651,6 +663,8 @@ void* responder_therd(void* arg)
 									d.v4addr[i] & 0xff);
 							}
 							fprintf(stderr, "successful probe\n");
+							fprintf(stderr, "request_size: %d\n", probe->request_info->size_of_valid_request_packet);
+							memset(&d, 0, sizeof(struct dnsentry));
 						}
 					}
 					else 
@@ -661,6 +675,7 @@ void* responder_therd(void* arg)
 				}
 				curl_multi_remove_handle(engine->curl_multi, e);
 				curl_easy_cleanup(e);
+				free(probe->request_info);
 				free(probe);
 			}
 		}
@@ -814,7 +829,7 @@ int main(int argc, const char* argv[])
 
 	listener_thread_args listner_args = {.port= local_port, .DoH_url=DoH_url};
 	pthread_create(&listenerd_thread_id, &attr, listener_thread, (void*) &listner_args);
-	pthread_create(&responder_thread_id, &attr, responder_therd, NULL);
+	pthread_create(&responder_thread_id, &attr, responder_thread, NULL);
 
 	pthread_join(listenerd_thread_id, status);
 	pthread_join(responder_thread_id, status);

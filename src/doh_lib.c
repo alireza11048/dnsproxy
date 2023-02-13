@@ -536,7 +536,7 @@ static void doh_cleanup(struct dnsentry *d)
 int initprobe(int dnstype, char *host, const char *url, CURLM *multi,
                      int trace_enabled, struct curl_slist *headers,
                      bool insecure_mode, enum iptrans transport,
-                     struct curl_slist *resolve)
+                     struct curl_slist *resolve, dns_request_info *request_info)
 {
   CURL *curl;
   struct dnsprobe *p = calloc((size_t)1, sizeof *p);
@@ -550,6 +550,7 @@ int initprobe(int dnstype, char *host, const char *url, CURLM *multi,
     return 2;
   }
 
+  p->request_info = request_info;
   p->dnstype = dnstype;
   p->serverdoh.memory = malloc(1);  /* will be grown as needed by realloc above */
   p->serverdoh.size = 0;    /* no data at this point */
