@@ -459,7 +459,80 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, 
 		result_code = 1;
 	}
 
-	//  the request is valid and supported 
+	// searching in the cache
+	if(result_code == 0 && ntohs(qds->type) == 0x01) 
+	{
+		DOMAIN_CACHE *dcache;
+		dcache = domain_cache_search(domain);
+		if(dcache) 
+		{
+			DNS_HDR *rhdr;
+			char rbuffer[PACKAGE_SIZE];
+			time_t current;
+			unsigned int ttl, ttl_tmp;
+			DNS_RRS *rrs;
+			rhdr = (DNS_HDR*)rbuffer;
+			memset(rbuffer, 0, sizeof(DNS_HDR));
+			rhdr->id = hdr->id;
+			rhdr->qr = 1;
+			rhdr->rcode = 0;
+
+			rhdr->qd_count = htons(1);
+			rhdr->an_count = htons(dcache->an_count);
+			pos = rbuffer + sizeof(DNS_HDR);
+			memcpy(pos, head, q_len);
+			pos += q_len;
+			memcpy(pos, dcache->answer, dcache->an_length);
+			rear = pos + dcache->an_length;
+			if(dcache->expire > 0) 
+			{
+				if(time(&current) <= dcache->timestamp)
+					ttl = 1;
+				else
+					ttl = (unsigned int)(current - dcache->timestamp);
+				index = 0;
+				while(pos < rear && index++ < dcache->an_count) 
+				{
+					rrs = NULL;
+					if((unsigned char)*pos == 0xc0) 
+					{
+						pos += 2;
+						rrs = (DNS_RRS*) pos;
+					}
+					else 
+					{
+						while(pos < rear) 
+						{
+							qlen = (unsigned char)*pos++;
+							if(qlen > 0)
+								pos += qlen;
+							else 
+							{
+								rrs = (DNS_RRS*) pos;
+								break;
+							}
+						}
+					}
+					ttl_tmp = ntohl(rrs->ttl);
+					if(ttl_tmp <= ttl)
+						ttl_tmp = 1;
+					else
+						ttl_tmp -= ttl;
+					rrs->ttl = htonl(ttl_tmp);
+					pos += sizeof(DNS_RRS) + ntohs(rrs->rd_length);
+				}
+			}
+			sendto(ldns->sock, rbuffer, rear - rbuffer, 0, (struct sockaddr*)&source, sizeof(struct sockaddr_in));
+
+			#ifdef _VERBOSE_
+				fprintf(stdout, "[%s] respond is sent from the cache\n", domain);
+			#endif
+
+			return;
+		}
+	}
+
+	// the request is valid and supported 
 	if(result_code == 0) 
 	{	
 		// collecting the request data to be used during generating the response
@@ -501,6 +574,102 @@ static void process_doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, 
 		rhdr->qr = 1;
 		rhdr->rcode = result_code;
 		sendto(ldns->sock, rbuffer, sizeof(DNS_HDR), 0, (struct sockaddr*)&source, sizeof(struct sockaddr_in));
+	}
+}
+
+static void push_dns_record_to_the_cache(char* buffer, int size)
+{
+	DNS_HDR *hdr;
+	DNS_QDS *qds;
+	DNS_RRS *rrs;
+	LOCAL_DNS *ldns;
+	TRANSPORT_CACHE *cache;
+	char domain[PACKAGE_SIZE];
+	char *pos, *rear, *answer;
+	int badfmt, dlen, length;
+	unsigned char qlen;
+	unsigned int ttl, ttl_tmp;
+	unsigned short index, an_count;
+
+	length = size;
+	hdr = (DNS_HDR*)buffer;
+	an_count = ntohs(hdr->an_count);
+	if(hdr->qr == 1 && hdr->tc == 0 && ntohs(hdr->qd_count) == 1 && an_count > 0) 
+	{
+		dlen = 0;
+		qds = NULL;
+		pos = buffer + sizeof(DNS_HDR);
+		rear = buffer + size;
+		while(pos < rear) 
+		{
+			qlen = (unsigned char)*pos++;
+			if(qlen > 63 || (pos + qlen) > (rear - sizeof(DNS_QDS)))
+				break;
+			if(qlen > 0) 
+			{
+				if(dlen > 0)
+					domain[dlen++] = '.';
+				while(qlen-- > 0)
+					domain[dlen++] = (char)tolower(*pos++);
+			}
+			else 
+			{
+				qds = (DNS_QDS*) pos;
+				if(ntohs(qds->classes) != 0x01)
+					qds = NULL;
+				else
+					pos += sizeof(DNS_QDS);
+				break;
+			}
+		}
+		domain[dlen] = '\0';
+
+		if(qds && ntohs(qds->type) == 0x01) 
+		{
+			ttl = MAX_TTL;
+			index = 0;
+			badfmt = 0;
+			answer = pos;
+			while(badfmt == 0 && pos < rear && index++ < an_count) 
+			{
+				rrs = NULL;
+				if((unsigned char)*pos == 0xc0) 
+				{
+					pos += 2;
+					rrs = (DNS_RRS*) pos;
+				}
+				else {
+					while(pos < rear) {
+						qlen = (unsigned char)*pos++;
+						if(qlen > 63 || (pos + qlen) > (rear - sizeof(DNS_RRS)))
+							break;
+						if(qlen > 0)
+							pos += qlen;
+						else {
+							rrs = (DNS_RRS*) pos;
+							break;
+						}
+					}
+				}
+				if(rrs == NULL || ntohs(rrs->classes) != 0x01)
+					badfmt = 1;
+				else {
+					ttl_tmp = ntohl(rrs->ttl);
+					if(ttl_tmp < ttl)
+						ttl = ttl_tmp;
+					pos += sizeof(DNS_RRS) + ntohs(rrs->rd_length);
+				}
+			}
+			if(badfmt == 0) {
+				hdr->nr_count = 0;
+				hdr->ns_count = 0;
+				length = pos - buffer;
+				domain_cache_append(domain, dlen, ttl, an_count, pos - answer, answer);
+				#ifdef _VERBOSE_
+					fprintf(stdout, "[%s] has been inserted in to the cache\n", domain);
+				#endif
+			}
+		}
 	}
 }
 
@@ -711,6 +880,8 @@ void* responder_thread(void* arg)
 								offset += answer_entry_size;
 							}
 							sendto(engine->local.sock, probe->request_info->response_buffer, probe->request_info->size_of_valid_request_packet + 2 /* response name */ + sizeof(DNS_RRS) + 4, 0, &probe->request_info->source, sizeof(struct sockaddr_in));
+							if(!disable_cache)
+								push_dns_record_to_the_cache(probe->request_info->response_buffer, probe->request_info->size_of_valid_request_packet + 2 /* response name */ + sizeof(DNS_RRS) + 4);
 							memset(&d, 0, sizeof(struct dnsentry));
 						}
 					}
