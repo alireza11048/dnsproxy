@@ -58,8 +58,7 @@ static void doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, const ch
 	char *buffer, domain[PACKAGE_SIZE];
 	int size, dlen;
 	unsigned char qlen;
-	unsigned int ttl, ttl_tmp;
-	unsigned short index, q_len, result_code = 0;
+	unsigned short result_code = 0;
 
 	ldns = &engine->local;
 	curl_multi = engine->curl_multi;
@@ -71,7 +70,6 @@ static void doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, const ch
 		return;
 
 	hdr = (DNS_HDR*)buffer;
-	q_len = 0;
 	qds = NULL;
 	head = buffer + sizeof(DNS_HDR);
 	rear = buffer + size;
@@ -108,7 +106,6 @@ static void doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, const ch
 				else 
 				{
 					pos += sizeof(DNS_QDS);
-					q_len = pos - head;
 				}
 				break;
 			}
@@ -578,16 +575,13 @@ static void push_dns_record_to_the_cache(char* buffer, int size)
 	DNS_HDR *hdr;
 	DNS_QDS *qds;
 	DNS_RRS *rrs;
-	LOCAL_DNS *ldns;
-	TRANSPORT_CACHE *cache;
 	char domain[PACKAGE_SIZE];
 	char *pos, *rear, *answer;
-	int badfmt, dlen, length;
+	int badfmt, dlen;
 	unsigned char qlen;
 	unsigned int ttl, ttl_tmp;
 	unsigned short index, an_count;
 
-	length = size;
 	hdr = (DNS_HDR*)buffer;
 	an_count = ntohs(hdr->an_count);
 	if(hdr->qr == 1 && hdr->tc == 0 && ntohs(hdr->qd_count) == 1 && an_count > 0) 
@@ -659,7 +653,6 @@ static void push_dns_record_to_the_cache(char* buffer, int size)
 			if(badfmt == 0) {
 				hdr->nr_count = 0;
 				hdr->ns_count = 0;
-				length = pos - buffer;
 				domain_cache_append(domain, dlen, ttl, an_count, pos - answer, answer);
 				#ifdef _VERBOSE_
 					fprintf(stdout, "[%s] has been inserted in to the cache\n", domain);
@@ -839,7 +832,7 @@ void* responder_thread(void* arg)
 							probe->request_info->response_buffer = realloc(probe->request_info->response_buffer, probe->request_info->size_of_valid_request_packet /* size of the */ + (2 /* response name */ + sizeof(DNS_RRS) + 4 /*size of the result ip*/) * d.numv4);
 							memset(probe->request_info->response_buffer + probe->request_info->size_of_valid_request_packet, 0, (2 /* response name */ + sizeof(DNS_RRS) + 4 /*size of the result ip*/) * d.numv4);
 							
-							DNS_HDR *response_hdr = probe->request_info->response_buffer;
+							DNS_HDR *response_hdr = (DNS_HDR *)probe->request_info->response_buffer;
 							response_hdr->qr = 1;
 							response_hdr->aa = 0;
 							response_hdr->tc = 0;
@@ -851,7 +844,7 @@ void* responder_thread(void* arg)
 							response_hdr->nr_count = ntohs(0);
 
 							// poitner to the query entry
-							DNS_QDS *querey_entry = probe->request_info->response_buffer + probe->request_info->size_of_valid_request_packet - 4;
+							DNS_QDS *querey_entry = (DNS_QDS *)(probe->request_info->response_buffer + probe->request_info->size_of_valid_request_packet - 4);
 
 							int answer_entry_size = (2 /* response name */ + sizeof(DNS_RRS) + 4);
 							int offset = 0;
@@ -864,7 +857,7 @@ void* responder_thread(void* arg)
 								probe->request_info->response_buffer[probe->request_info->size_of_valid_request_packet + offset + 1] = 0x0c;
 
 								// creating answer quey detail section
-								DNS_RRS *answer_entry = probe->request_info->response_buffer + probe->request_info->size_of_valid_request_packet + offset + 2;
+								DNS_RRS *answer_entry = (DNS_RRS *)(probe->request_info->response_buffer + probe->request_info->size_of_valid_request_packet + offset + 2);
 								answer_entry->type = querey_entry->type;
 								answer_entry->classes = querey_entry->classes;
 								answer_entry->ttl = htonl(d.ttl);
@@ -875,7 +868,7 @@ void* responder_thread(void* arg)
 								answer_entry->rd_data[3] = (d.v4addr[0]) & 0xff;
 								offset += answer_entry_size;
 							}
-							sendto(engine->local.sock, probe->request_info->response_buffer, probe->request_info->size_of_valid_request_packet + 2 /* response name */ + sizeof(DNS_RRS) + 4, 0, &probe->request_info->source, sizeof(struct sockaddr_in));
+							sendto(engine->local.sock, probe->request_info->response_buffer, probe->request_info->size_of_valid_request_packet + 2 /* response name */ + sizeof(DNS_RRS) + 4, 0, (struct sockaddr *)&probe->request_info->source, sizeof(struct sockaddr_in));
 							if(!disable_cache)
 								push_dns_record_to_the_cache(probe->request_info->response_buffer, probe->request_info->size_of_valid_request_packet + 2 /* response name */ + sizeof(DNS_RRS) + 4);
 							memset(&d, 0, sizeof(struct dnsentry));
