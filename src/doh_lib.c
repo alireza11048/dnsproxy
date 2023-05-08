@@ -5,7 +5,6 @@
 #include <stdbool.h>
 #include "doh_lib.h"
 
-doh_status doh_module_status;
 
 void dump(const char *text,
           FILE *stream, unsigned char *ptr, size_t size,
@@ -608,14 +607,4 @@ int initprobe(int dnstype, char *host, const char *url, CURLM *multi,
   }
 
   return 0;
-}
-
-int init_doh_lib(void)
-{
-  doh_module_status.probe_count = 0;
-}
-
-int get_active_probe_count(void)
-{
-  return doh_module_status.probe_count;
 }

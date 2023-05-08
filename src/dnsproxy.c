@@ -247,7 +247,7 @@ static void doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, const ch
 			memcpy(response_buffer, buffer, size_of_valid_request_packet);
 			
 			// adjusting the response header
-			DNS_HDR *response_hdr = response_buffer;
+			DNS_HDR *response_hdr = (DNS_HDR *) response_buffer;
 			response_hdr->qr = 1;
 			response_hdr->aa = 0;
 			response_hdr->tc = 0;
@@ -259,7 +259,7 @@ static void doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, const ch
 			response_hdr->nr_count = ntohs(0);
 			
 			// poitner to the query entry
-			DNS_QDS *querey_entry = response_buffer + size_of_valid_request_packet - 4;
+			DNS_QDS *querey_entry = (DNS_QDS *)(response_buffer + size_of_valid_request_packet - 4);
 
 			int answer_entry_size = (2 /* response name */ + sizeof(DNS_RRS) + 4);
 			int offset = 0;
@@ -269,7 +269,7 @@ static void doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, const ch
 			{
 				response_buffer[size_of_valid_request_packet + offset] = 0xc0;
 				response_buffer[size_of_valid_request_packet + offset + 1] = 0x0c;
-				DNS_RRS *answer_entry = response_buffer + size_of_valid_request_packet + offset + 2;
+				DNS_RRS *answer_entry = (DNS_RRS*)(response_buffer + size_of_valid_request_packet + offset + 2);
 				answer_entry->type = querey_entry->type;
 				answer_entry->classes = querey_entry->classes;
 				answer_entry->ttl = htonl(d.ttl);
@@ -280,7 +280,7 @@ static void doh_query(PROXY_ENGINE *engine, struct curl_slist *headers, const ch
 				answer_entry->rd_data[3] = (d.v4addr[0]) & 0xff;
 				offset += answer_entry_size;
 			}
-			sendto(ldns->sock, response_buffer, size_of_valid_request_packet + 2 /* response name */ + sizeof(DNS_RRS) + 4, 0, &source, sizeof(struct sockaddr_in));
+			sendto(ldns->sock, response_buffer, size_of_valid_request_packet + 2 /* response name */ + sizeof(DNS_RRS) + 4, 0, (struct sockaddr *)&source, sizeof(struct sockaddr_in));
 			free(response_buffer);
 		}
 	}
@@ -348,17 +348,13 @@ static int dnsproxy(unsigned short local_port, const char* DoH_url)
 		FD_SET(ldns->sock, &readfds);
 		maxfd = (int)ldns->sock;
 
-		/* if active probes are empty, waiting for a dns request */
-		if(get_active_probe_count() == 0)
-		{
-			timeout.tv_sec = CACHE_CLEAN_TIME;
-			timeout.tv_usec = 0;
-			fds = select(maxfd + 1, &readfds, NULL, NULL, &timeout);
-			if(fds > 0) {
-				if(FD_ISSET(ldns->sock, &readfds))
-					doh_query(engine, headers, DoH_url);
-			}	
-		}
+		timeout.tv_sec = CACHE_CLEAN_TIME;
+		timeout.tv_usec = 0;
+		fds = select(maxfd + 1, &readfds, NULL, NULL, &timeout);
+		if(fds > 0) {
+			if(FD_ISSET(ldns->sock, &readfds))
+				doh_query(engine, headers, DoH_url);
+		}	
 
 		
 		if(time(&current) - last_clean > CACHE_CLEAN_TIME || fds == 0) {
