@@ -25,8 +25,9 @@ static const char *__progname(const char* name)
 
 int xgetopt(int argc, const char* argv[], const struct xoption* options, int* optind, const char **optarg)
 {
-	int i, val, match, name_len;
+	int i, val, match;
 	const char *cur_argv, *embed_arg;
+	size_t name_len = 0;
 
 	if(argc < 1 || argv == NULL || options == NULL || optind == NULL || optarg == NULL)
 		return -1;

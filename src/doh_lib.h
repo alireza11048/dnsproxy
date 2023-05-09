@@ -68,7 +68,7 @@ struct dnsentry {
   struct txtstore txt[MAX_ADDR];
 };
 
-static const char *type2name(int dnstype)
+static __attribute__((unused)) const char * type2name(int dnstype)
 {
   switch(dnstype) {
   case DNS_TYPE_A: return "A";
@@ -105,11 +105,14 @@ struct dnsprobe {
   dns_request_info* request_info;
 };
 
-int get_active_probe_count(void);
-int init_doh_lib(void);
 int initprobe(int dnstype, char *host, const char *url, CURLM *multi,
                      int trace_enabled, struct curl_slist *headers,
                      bool insecure_mode, enum iptrans transport,
                      struct curl_slist *resolve, dns_request_info *request_info);
+
+DOHcode doh_decode(unsigned char *doh,
+                          size_t dohlen,
+                          int dnstype,
+                          struct dnsentry *d);
 
 #endif
