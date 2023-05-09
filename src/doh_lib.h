@@ -68,7 +68,7 @@ struct dnsentry {
   struct txtstore txt[MAX_ADDR];
 };
 
-static const char *type2name(int dnstype)
+static __attribute__((unused)) const char * type2name(int dnstype)
 {
   switch(dnstype) {
   case DNS_TYPE_A: return "A";

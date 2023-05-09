@@ -516,13 +516,13 @@ DOHcode doh_decode(unsigned char *doh,
   return DOH_OK; /* ok */
 }
 
-static void doh_init(struct dnsentry *d)
+static void  __attribute__((unused)) doh_init(struct dnsentry *d)
 {
   memset(d, 0, sizeof(struct dnsentry));
   d->ttl = ~0u; /* default to max */
 }
 
-static void doh_cleanup(struct dnsentry *d)
+static void __attribute__((unused)) doh_cleanup(struct dnsentry *d)
 {
   int i = 0;
   for(i=0; i< d->numcname; i++) {
