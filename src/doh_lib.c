@@ -5,7 +5,6 @@
 #include <stdbool.h>
 #include "doh_lib.h"
 
-doh_status doh_module_status;
 
 void dump(const char *text,
           FILE *stream, unsigned char *ptr, size_t size,
@@ -517,13 +516,13 @@ DOHcode doh_decode(unsigned char *doh,
   return DOH_OK; /* ok */
 }
 
-static void doh_init(struct dnsentry *d)
+static void  __attribute__((unused)) doh_init(struct dnsentry *d)
 {
   memset(d, 0, sizeof(struct dnsentry));
   d->ttl = ~0u; /* default to max */
 }
 
-static void doh_cleanup(struct dnsentry *d)
+static void __attribute__((unused)) doh_cleanup(struct dnsentry *d)
 {
   int i = 0;
   for(i=0; i< d->numcname; i++) {
@@ -536,7 +535,7 @@ static void doh_cleanup(struct dnsentry *d)
 int initprobe(int dnstype, char *host, const char *url, CURLM *multi,
                      int trace_enabled, struct curl_slist *headers,
                      bool insecure_mode, enum iptrans transport,
-                     struct curl_slist *resolve)
+                     struct curl_slist *resolve, dns_request_info *request_info)
 {
   CURL *curl;
   struct dnsprobe *p = calloc((size_t)1, sizeof *p);
@@ -550,6 +549,7 @@ int initprobe(int dnstype, char *host, const char *url, CURLM *multi,
     return 2;
   }
 
+  p->request_info = request_info;
   p->dnstype = dnstype;
   p->serverdoh.memory = malloc(1);  /* will be grown as needed by realloc above */
   p->serverdoh.size = 0;    /* no data at this point */
@@ -607,14 +607,4 @@ int initprobe(int dnstype, char *host, const char *url, CURLM *multi,
   }
 
   return 0;
-}
-
-int init_doh_lib(void)
-{
-  doh_module_status.probe_count = 0;
-}
-
-int get_active_probe_count(void)
-{
-  return doh_module_status.probe_count;
 }
