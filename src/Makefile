@@ -7,10 +7,9 @@ CC = gcc
 RM = rm -f
 CP = cp -f
 
-CFLAGS = -O2 -Wall -DVERSION=\"${version}\" -DNDEBUG
-LDFLAGS = -s
+LDLIBS = -lpthread `curl-config --libs`
+CFLAGS = -g -W -Wall `curl-config --cflags`
 PREFIX = /usr
-
 TARGET = dnsproxy
 INCLUDES = $(wildcard *.h embed/*.h)
 SOURCES = $(wildcard *.c embed/*.c)
@@ -30,7 +29,7 @@ all: $(TARGET)
 $(OBJS): $(SOURCES) $(INCLUDES)
 
 $(TARGET): $(OBJS)
-	$(CC) -o $(TARGET) $(OBJS) $(LDFLAGS)
+	$(CC) -o $(TARGET) $(OBJS) $(LDFLAGS) $(LDLIBS)
 
 clean:
 	$(RM) *.o embed/*.o *~ $(TARGET)
