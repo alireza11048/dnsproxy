@@ -1,33 +1,20 @@
 dnsproxy
 ========
 
-A simple DNS proxy server
+A simple Dns-Over-Https proxy server
 
 
 ## Simple tutorial
 
+use the below commands to build and deploy the Dns-Over-Https proxy server.
+
 ```bash
-$ dnsproxy -h
-Usage: dnsproxy [options]
--d or --daemon
-(daemon mode)
--p <port> or --port=<port>
-(local bind port, default 8053)
--R <ip> or --remote-addr=<ip>
-(remote server ip, default 8.8.8.8)
--P <port> or --remote-port=<port>
-(remote server port, default 53)
--f <file> or --hosts-file=<file>
-(user-defined hosts file)
--h, --help           (print help and exit)
--v, --version        (print version and exit)
+$ docker build . -t dnsproxy
+$ docker-compose -f ./docker-compose.yaml up
 ```
 
-## Hosts file example
+now, dnsproxy docker container will be up and ready for use. set your default DNS to the loopback(127.0.0.1) address and enjoy doh-to-dns proxy server.
 
-```
-127.0.0.1 example.com www.example.com
-192.168.0.1 *.test.com
-192.168.0.2 2*.test.com
-192.168.0.3 *3.test.com
-```
+## Setting the parameters
+you can set your desired DoH server at the scripts/run.sh file, and also you should set your Default dns server in the docker-compose.yaml file.
+
